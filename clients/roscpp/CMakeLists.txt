@@ -96,6 +96,7 @@ add_library(roscpp
   src/libros/connection_manager.cpp
   src/libros/file_log.cpp
   src/libros/transport/transport_udp.cpp
+  src/libros/transport/transport_xeno.cpp
   src/libros/transport/transport_tcp.cpp
   src/libros/subscriber_link.cpp
   src/libros/service_client_link.cpp
