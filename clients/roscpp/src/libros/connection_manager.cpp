@@ -32,6 +32,7 @@
 #include "ros/service_client_link.h"
 #include "ros/transport/transport_tcp.h"
 #include "ros/transport/transport_udp.h"
+#include "ros/transport/transport_xeno.h"
 #include "ros/file_log.h"
 #include "ros/network.h"
 

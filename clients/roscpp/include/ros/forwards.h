@@ -58,6 +58,8 @@ class TransportTCP;
 typedef boost::shared_ptr<TransportTCP> TransportTCPPtr;
 class TransportUDP;
 typedef boost::shared_ptr<TransportUDP> TransportUDPPtr;
+class TransportXeno;
+typedef boost::shared_ptr<TransportXeno> TransportXenoPtr;
 class Connection;
 typedef boost::shared_ptr<Connection> ConnectionPtr;
 typedef std::set<ConnectionPtr> S_Connection;

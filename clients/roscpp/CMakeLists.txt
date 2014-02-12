@@ -20,7 +20,10 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/ros/common.h.in ${CATKIN_DEVE
 
 find_package(Boost REQUIRED COMPONENTS signals filesystem system)
 
-include_directories(include ${CATKIN_DEVEL_PREFIX}/${CATKIN_GLOBAL_INCLUDE_DESTINATION}/ros ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
+find_package(PkgConfig)
+pkg_check_modules(Xenomai REQUIRED libxenomai_posix)
+
+include_directories(include ${CATKIN_DEVEL_PREFIX}/${CATKIN_GLOBAL_INCLUDE_DESTINATION}/ros ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${Xenomai_INCLUDE_DIRS})
 
 add_message_files(
   DIRECTORY msg
@@ -120,6 +123,7 @@ add_dependencies(roscpp roscpp_gencpp rosgraph_msgs_gencpp std_msgs_gencpp)
 target_link_libraries(roscpp
   ${catkin_LIBRARIES}
   ${Boost_LIBRARIES}
+  ${Xenomai_LIBRARIES}
   )
 
 #explicitly install library and includes

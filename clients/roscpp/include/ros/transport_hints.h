@@ -151,6 +151,24 @@ public:
   }
 
   /**
+   * \brief Specifies a real-time transport. Currently this means Xenomai IDDP sockets
+   */
+  TransportHints& realTime()
+  {
+    xenoIntraDomain();
+    return *this;
+  }
+
+  /**
+   * \brief Explicitly specifies a Xenomai transport.
+   */
+  TransportHints& xenoIntraDomain()
+  {
+    transports_.push_back("Xeno");
+    return *this;
+  }
+
+  /**
    * \brief Returns a vector of transports, ordered by preference
    */
   const V_string& getTransports() { return transports_; }

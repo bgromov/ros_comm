@@ -818,10 +818,12 @@ if (handle)
    *  \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name, or is an otherwise invalid graph resource name
    */
   template<class T, class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(MReq &, MRes &), T *obj)
+  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(MReq &, MRes &), T *obj,
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template init<MReq, MRes>(service, boost::bind(srv_func, obj, _1, _2));
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -856,10 +858,12 @@ if (handle)
    *  \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name, or is an otherwise invalid graph resource name
    */
   template<class T, class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(ServiceEvent<MReq, MRes>&), T *obj)
+  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(ServiceEvent<MReq, MRes>&), T *obj,
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template initBySpecType<ServiceEvent<MReq, MRes> >(service, boost::bind(srv_func, obj, _1));
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -895,11 +899,13 @@ if (handle)
    * \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name
    */
   template<class T, class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(MReq &, MRes &), const boost::shared_ptr<T>& obj)
+  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(MReq &, MRes &), const boost::shared_ptr<T>& obj,
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template init<MReq, MRes>(service, boost::bind(srv_func, obj.get(), _1, _2));
     ops.tracked_object = obj;
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -935,11 +941,13 @@ if (handle)
    * \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name
    */
   template<class T, class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(ServiceEvent<MReq, MRes>&), const boost::shared_ptr<T>& obj)
+  ServiceServer advertiseService(const std::string& service, bool(T::*srv_func)(ServiceEvent<MReq, MRes>&), const boost::shared_ptr<T>& obj,
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template initBySpecType<ServiceEvent<MReq, MRes> >(service, boost::bind(srv_func, obj.get(), _1));
     ops.tracked_object = obj;
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -972,10 +980,12 @@ if (handle)
    * \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name
    */
   template<class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(*srv_func)(MReq&, MRes&))
+  ServiceServer advertiseService(const std::string& service, bool(*srv_func)(MReq&, MRes&),
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template init<MReq, MRes>(service, srv_func);
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -1008,10 +1018,12 @@ if (handle)
    * \throws InvalidNameException If the service name begins with a tilde, or is an otherwise invalid graph resource name
    */
   template<class MReq, class MRes>
-  ServiceServer advertiseService(const std::string& service, bool(*srv_func)(ServiceEvent<MReq, MRes>&))
+  ServiceServer advertiseService(const std::string& service, bool(*srv_func)(ServiceEvent<MReq, MRes>&),
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template initBySpecType<ServiceEvent<MReq, MRes> >(service, srv_func);
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -1043,11 +1055,13 @@ if (handle)
    */
   template<class MReq, class MRes>
   ServiceServer advertiseService(const std::string& service, const boost::function<bool(MReq&, MRes&)>& callback, 
-                                 const VoidConstPtr& tracked_object = VoidConstPtr())
+                                 const VoidConstPtr& tracked_object = VoidConstPtr(),
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template init<MReq, MRes>(service, callback);
     ops.tracked_object = tracked_object;
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -1081,11 +1095,13 @@ if (handle)
    */
   template<class S>
   ServiceServer advertiseService(const std::string& service, const boost::function<bool(S&)>& callback, 
-                                 const VoidConstPtr& tracked_object = VoidConstPtr())
+                                 const VoidConstPtr& tracked_object = VoidConstPtr(),
+                                 const TransportHints& transport_hints = TransportHints())
   {
     AdvertiseServiceOptions ops;
     ops.template initBySpecType<S>(service, callback);
     ops.tracked_object = tracked_object;
+    ops.transport_hints = transport_hints;
     return advertiseService(ops);
   }
 
@@ -1127,10 +1143,12 @@ if (handle)
    */
   template<class MReq, class MRes>
   ServiceClient serviceClient(const std::string& service_name, bool persistent = false, 
-                              const M_string& header_values = M_string())
+                              const M_string& header_values = M_string(),
+                              const TransportHints& transport_hints = TransportHints())
   {
     ServiceClientOptions ops;
     ops.template init<MReq, MRes>(service_name, persistent, header_values);
+    ops.transport_hints = transport_hints;
     return serviceClient(ops);
   }
 
@@ -1147,10 +1165,12 @@ if (handle)
    */
   template<class Service>
   ServiceClient serviceClient(const std::string& service_name, bool persistent = false, 
-                              const M_string& header_values = M_string())
+                              const M_string& header_values = M_string(),
+                              const TransportHints& transport_hints = TransportHints())
   {
     ServiceClientOptions ops;
     ops.template init<Service>(service_name, persistent, header_values);
+    ops.transport_hints = transport_hints;
     return serviceClient(ops);
   }
 

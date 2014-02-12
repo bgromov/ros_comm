@@ -42,6 +42,9 @@
 #include "ros/io.h"
 #include <ros/common.h>
 
+#include <xenomai/rtdm/rtipc.h>
+#include <xenomai/nucleus/types.h>
+
 namespace ros
 {
 
@@ -81,7 +84,7 @@ public:
    * \param port The port to connect to
    * \return Whether or not the connection was successful
    */
-  bool connect(const std::string& host, int port, int conn_id);
+  bool connect(const std::string& label, int conn_id);
 
   /**
    * \brief Returns the URI of the remote host
@@ -92,15 +95,15 @@ public:
    * \brief Start a server socket and listen on a port
    * \param port The port to listen on
    */
-  bool createIncoming(int port, bool is_server);
+  bool createIncoming(const std::string& label, bool is_server);
   /**
    * \brief Create a connection to a server socket.
    */
-  TransportXenoPtr createOutgoing(std::string host, int port, int conn_id, int max_datagram_size);
+  TransportXenoPtr createOutgoing(const std::string& label, int conn_id, int max_datagram_size);
   /**
    * \brief Returns the port this transport is listening on
    */
-  int getServerPort() const {return server_port_;}
+  std::string getServerLabel() const {return server_label_;}
 
   // overrides from Transport
   virtual int32_t read(uint8_t* buffer, uint32_t size);
@@ -125,27 +128,45 @@ private:
   /**
    * \brief Initializes the assigned socket -- sets it to non-blocking and enables reading
    */
-  bool initializeSocket();
+  bool initializeReqSocket();
 
   /**
-   * \brief Set the socket to be used by this transport
+   * \brief Initializes the assigned socket -- sets it to non-blocking and enables writing
+   */
+  bool initializeRepSocket();
+
+  /**
+   * \brief Set the socket to be used by this transport for reading
    * \param sock A valid Xeno socket
    * \return Whether setting the socket was successful
    */
-  bool setSocket(int sock);
+  bool setReqSocket(int sock);
 
-  void socketUpdate(int events);
+  /**
+   * \brief Set the socket to be used by this transport for writing
+   * \param sock A valid Xeno socket
+   * \return Whether setting the socket was successful
+   */
+  bool setRepSocket(int sock);
 
-  socket_fd_t sock_;
-  bool closed_;
-  boost::mutex close_mutex_;
+  void reqSocketUpdate(int events);
+  void repSocketUpdate(int events);
+
+  socket_fd_t req_sock_;
+  socket_fd_t rep_sock_;
+  bool req_closed_;
+  bool rep_closed_;
+  boost::mutex req_close_mutex_;
+  boost::mutex rep_close_mutex_;
 
   bool expecting_read_;
   bool expecting_write_;
 
   bool is_server_;
-  sockaddr_in server_address_;
-  int server_port_;
+  rtipc_port_label plabel_req_;
+  rtipc_port_label plabel_rep_;
+  sockaddr_ipc server_address_;
+  std::string server_label_;
 
   std::string cached_remote_host_;
 

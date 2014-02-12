@@ -100,6 +100,9 @@ struct ROSCPP_DECL ServiceClientOptions
   std::string md5sum;                                                       ///< Service md5sum
   bool persistent;                                                          ///< Whether or not the connection should persist
   M_string header;                                                          ///< Extra key/value pairs to add to the connection header
+
+  TransportHints transport_hints;                                           ///< Hints for transport type and options
+
 };
 
 

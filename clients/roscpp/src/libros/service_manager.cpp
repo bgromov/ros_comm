@@ -38,6 +38,7 @@
 #include "ros/master.h"
 #include "ros/transport/transport_tcp.h"
 #include "ros/transport/transport_udp.h"
+#include "ros/transport/transport_xeno.h"
 #include "ros/init.h"
 #include "ros/connection.h"
 #include "ros/file_log.h"

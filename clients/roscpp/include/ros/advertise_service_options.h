@@ -137,6 +137,8 @@ struct ROSCPP_DECL AdvertiseServiceOptions
    */
   VoidConstPtr tracked_object;
 
+  TransportHints transport_hints;                                   ///< Hints for transport type and options
+
   /**
    * \brief Templated helper function for creating an AdvertiseServiceOptions with all of its options
    * \param service Service name to advertise on

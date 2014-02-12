@@ -51,12 +51,14 @@ namespace ros
 {
 
 TransportXeno::TransportXeno(PollSet* poll_set, int flags, int max_datagram_size)
-: sock_(-1)
-, closed_(false)
+: req_sock_(-1)
+, rep_sock_(-1)
+, req_closed_(false)
+, rep_closed_(false)
 , expecting_read_(false)
 , expecting_write_(false)
 , is_server_(false)
-, server_port_(-1)
+, server_label_(-1)
 , poll_set_(poll_set)
 , flags_(flags)
 , connection_id_(0)
@@ -79,23 +81,30 @@ TransportXeno::TransportXeno(PollSet* poll_set, int flags, int max_datagram_size
 
 TransportXeno::~TransportXeno()
 {
-  ROS_ASSERT_MSG(sock_ == ROS_INVALID_SOCKET, "TransportXeno socket [%d] was never closed", sock_);
+  ROS_ASSERT_MSG(req_sock_ == ROS_INVALID_SOCKET, "TransportXeno request socket [%d] was never closed", req_sock_);
+  ROS_ASSERT_MSG(rep_sock_ == ROS_INVALID_SOCKET, "TransportXeno reply socket [%d] was never closed", rep_sock_);
   delete [] reorder_buffer_;
   delete [] data_buffer_;
 }
 
-bool TransportXeno::setSocket(int sock)
+bool TransportXeno::setReqSocket(int sock)
 {
-  sock_ = sock;
-  return initializeSocket();
+  req_sock_ = sock;
+  return initializeReqSocket();
 }
 
-void TransportXeno::socketUpdate(int events)
+bool TransportXeno::setRepSocket(int sock)
+{
+  rep_sock_ = sock;
+  return initializeRepSocket();
+}
+
+void TransportXeno::reqSocketUpdate(int events)
 {
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
+    boost::mutex::scoped_lock lock(req_close_mutex_);
 
-    if (closed_)
+    if (req_closed_)
     {
       return;
     }
@@ -105,18 +114,20 @@ void TransportXeno::socketUpdate(int events)
      (events & POLLHUP) ||
      (events & POLLNVAL))
   {
-    ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d", sock_, events);
+    ROSCPP_LOG_DEBUG("Socket (request) %d closed with (ERR|HUP|NVAL) events %d", req_sock_, events);
     close();
   }
   else
   {
-    if ((events & POLLIN) && expecting_read_)
-    {
-      if (read_cb_)
-      {
-        read_cb_(shared_from_this());
-      }
-    }
+
+    // This is a write-only socket, we do not expect any reads
+//    if ((events & POLLIN) && expecting_read_)
+//    {
+//      if (read_cb_)
+//      {
+//        read_cb_(shared_from_this());
+//      }
+//    }
 
     if ((events & POLLOUT) && expecting_write_)
     {
@@ -129,140 +140,230 @@ void TransportXeno::socketUpdate(int events)
 
 }
 
+void TransportXeno::repSocketUpdate(int events)
+{
+  {
+    boost::mutex::scoped_lock lock(rep_close_mutex_);
+
+    if (rep_closed_)
+    {
+      return;
+    }
+  }
+
+  if((events & POLLERR) ||
+     (events & POLLHUP) ||
+     (events & POLLNVAL))
+  {
+    ROSCPP_LOG_DEBUG("Socket (reply) %d closed with (ERR|HUP|NVAL) events %d", rep_sock_, events);
+    close();
+  }
+  else
+  {
+    if ((events & POLLIN) && expecting_read_)
+    {
+      if (read_cb_)
+      {
+        read_cb_(shared_from_this());
+      }
+    }
+
+    // This is a read-only socket, we do not expect any writes
+//    if ((events & POLLOUT) && expecting_write_)
+//    {
+//      if (write_cb_)
+//      {
+//        write_cb_(shared_from_this());
+//      }
+//    }
+  }
+
+}
+
 std::string TransportXeno::getTransportInfo()
 {
   return "XENOROS connection to [" + cached_remote_host_ + "]";
 }
 
-bool TransportXeno::connect(const std::string& host, int port, int connection_id)
+bool TransportXeno::connect(const std::string& label, int connection_id)
 {
-  sock_ = socket(AF_INET, SOCK_DGRAM, 0);
-  connection_id_ = connection_id;
+  std::string label_req = label + "-req";
+  std::string label_rep = label + "-rep";
 
-  if (sock_ == ROS_INVALID_SOCKET)
+  req_sock_ = socket(AF_RTIPC, SOCK_DGRAM, IPCPROTO_IDDP);
+  if (req_sock_ == ROS_INVALID_SOCKET)
+  {
+    ROS_ERROR("socket() failed with error [%s]",  last_socket_error_string());
+    return false;
+  }
+  rep_sock_ = socket(AF_RTIPC, SOCK_DGRAM, IPCPROTO_IDDP);
+  if (rep_sock_ == ROS_INVALID_SOCKET)
   {
     ROS_ERROR("socket() failed with error [%s]",  last_socket_error_string());
     return false;
   }
 
-  sockaddr_in sin;
-  sin.sin_family = AF_INET;
-  if (inet_addr(host.c_str()) == INADDR_NONE)
-  {
-    struct addrinfo* addr;
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
+  connection_id_ = connection_id;
 
-    if (getaddrinfo(host.c_str(), NULL, &hints, &addr) != 0)
+  sockaddr_ipc sipc_req;
+  sockaddr_ipc sipc_rep;
+
+  sipc_req.sipc_family = AF_RTIPC;
+  sipc_req.sipc_port = -1; // pick next free
+
+  sipc_rep.sipc_family = AF_RTIPC;
+  sipc_rep.sipc_port = -1; // pick next free
+
+  if (!label.empty())
+  {
+    int ret;
+    if (label_req.length() > XNOBJECT_NAME_LEN)
     {
-      close();
-      ROS_ERROR("couldn't resolve host [%s]", host.c_str());
+      ROS_ERROR("Host name %s is too long for Xenomai socket. Maximum length is %d bytes, but %d bytes provided", label_req.c_str(), XNOBJECT_NAME_LEN, label_req.length());
       return false;
     }
 
-    bool found = false;
-    struct addrinfo* it = addr;
-    for (; it; it = it->ai_next)
+    strcpy(plabel_req_.label, label_req.c_str());
+    ret = setsockopt(req_sock_, SOL_IDDP, IDDP_LABEL, &plabel_req_, sizeof(plabel_req_));
+    if (ret)
     {
-      if (it->ai_family == AF_INET)
-      {
-        memcpy(&sin, it->ai_addr, it->ai_addrlen);
-        sin.sin_family = it->ai_family;
-        sin.sin_port = htons(port);
-
-        found = true;
-        break;
-      }
-    }
-
-    freeaddrinfo(addr);
-
-    if (!found)
-    {
-      ROS_ERROR("Couldn't find an AF_INET address for [%s]\n", host.c_str());
+      ROS_ERROR("Unable to set Xenomai socket label: %s", label_req.c_str());
       return false;
     }
-
-    ROSCPP_LOG_DEBUG("Resolved host [%s] to [%s]", host.c_str(), inet_ntoa(sin.sin_addr));
+    strcpy(plabel_rep_.label, label_rep.c_str());
+    ret = setsockopt(rep_sock_, SOL_IDDP, IDDP_LABEL, &plabel_rep_, sizeof(plabel_rep_));
+    if (ret)
+    {
+      ROS_ERROR("Unable to set Xenomai socket label: %s", label_rep.c_str());
+      return false;
+    }
   }
-  else
-  {
-    sin.sin_addr.s_addr = inet_addr(host.c_str()); // already an IP addr
-  }
 
-  sin.sin_port = htons(port);
-
-  if (::connect(sock_, (sockaddr *)&sin, sizeof(sin)))
+  if (::connect(req_sock_, (sockaddr *)&sipc_req, sizeof(sipc_req)))
   {
-    ROSCPP_LOG_DEBUG("Connect to xenoros host [%s:%d] failed with error [%s]", host.c_str(), port,  last_socket_error_string());
+    ROSCPP_LOG_DEBUG("Connect to xenoros host [%s] failed with error [%s]", label_req.c_str(),  last_socket_error_string());
     close();
 
     return false;
   }
-
-  // from daniel stonier:
-#ifdef WIN32
-  // This is hackish, but windows fails at recv() if its slow to connect (e.g. happens with wireless)
-  // recv() needs to check if its connected or not when its asynchronous?
-  Sleep(100);
-#endif
-
-  if (!initializeSocket())
+  if (!initializeReqSocket())
   {
     return false;
   }
+  ROSCPP_LOG_DEBUG("Connect succeeded to [%s] on socket [%d]", label_req.c_str(), req_sock_);
 
-  ROSCPP_LOG_DEBUG("Connect succeeded to [%s:%d] on socket [%d]", host.c_str(), port, sock_);
+  if (::bind(rep_sock_, (sockaddr *)&sipc_rep, sizeof(sipc_rep)))
+  {
+    ROSCPP_LOG_DEBUG("Bind xenoros [%s] failed with error [%s]", label_rep.c_str(),  last_socket_error_string());
+    close();
+
+    return false;
+  }
+  if (!initializeRepSocket())
+  {
+    return false;
+  }
+  ROSCPP_LOG_DEBUG("Bind succeeded to [%s] on socket [%d]", label_rep.c_str(), rep_sock_);
 
   return true;
 }
 
-bool TransportXeno::createIncoming(int port, bool is_server)
+bool TransportXeno::createIncoming(const std::string& label, bool is_server)
 {
   is_server_ = is_server;
 
-  sock_ = socket(AF_INET, SOCK_DGRAM, 0);
+  std::string label_req = label + "-req";
+  std::string label_rep = label + "-rep";
 
-  if (sock_ <= 0)
+  req_sock_ = socket(AF_RTIPC, SOCK_DGRAM, IPCPROTO_IDDP);
+  if (req_sock_ == ROS_INVALID_SOCKET)
   {
-    ROS_ERROR("socket() failed with error [%s]", last_socket_error_string());
+    ROS_ERROR("socket() failed with error [%s]",  last_socket_error_string());
+    return false;
+  }
+  rep_sock_ = socket(AF_RTIPC, SOCK_DGRAM, IPCPROTO_IDDP);
+  if (rep_sock_ == ROS_INVALID_SOCKET)
+  {
+    ROS_ERROR("socket() failed with error [%s]",  last_socket_error_string());
     return false;
   }
 
-  server_address_.sin_family = AF_INET;
-  server_address_.sin_port = htons(port);
-  server_address_.sin_addr.s_addr = INADDR_ANY;
-  if (bind(sock_, (sockaddr *)&server_address_, sizeof(server_address_)) < 0)
+  sockaddr_ipc sipc_req;
+  sockaddr_ipc sipc_rep;
+
+  sipc_req.sipc_family = AF_RTIPC;
+  sipc_req.sipc_port = -1; // pick next free
+
+  sipc_rep.sipc_family = AF_RTIPC;
+  sipc_rep.sipc_port = -1; // pick next free
+
+  if (!label.empty())
   {
-    ROS_ERROR("bind() failed with error [%s]",  last_socket_error_string());
-    return false;
+    int ret;
+    if (label_req.length() > XNOBJECT_NAME_LEN)
+    {
+      ROS_ERROR("Host name %s is too long for Xenomai socket. Maximum length is %d bytes, but %d bytes provided", label_req.c_str(), XNOBJECT_NAME_LEN, label_req.length());
+      return false;
+    }
+
+    strcpy(plabel_req_.label, label_req.c_str());
+    ret = setsockopt(req_sock_, SOL_IDDP, IDDP_LABEL, &plabel_req_, sizeof(plabel_req_));
+    if (ret)
+    {
+      ROS_ERROR("Unable to set Xenomai socket label: %s", label_req.c_str());
+      return false;
+    }
+    strcpy(plabel_rep_.label, label_rep.c_str());
+    ret = setsockopt(rep_sock_, SOL_IDDP, IDDP_LABEL, &plabel_rep_, sizeof(plabel_rep_));
+    if (ret)
+    {
+      ROS_ERROR("Unable to set Xenomai socket label: %s", label_rep.c_str());
+      return false;
+    }
   }
 
-  socklen_t len = sizeof(server_address_);
-  getsockname(sock_, (sockaddr *)&server_address_, &len);
-  server_port_ = ntohs(server_address_.sin_port);
-  ROSCPP_LOG_DEBUG("XENOROS server listening on port [%d]", server_port_);
+  // This is server, so bind request socket first
+  if (::bind(req_sock_, (sockaddr *)&sipc_req, sizeof(sipc_req)))
+  {
+    ROSCPP_LOG_DEBUG("Bind xenoros [%s] failed with error [%s]", label_req.c_str(),  last_socket_error_string());
+    close();
 
-  if (!initializeSocket())
+    return false;
+  }
+  if (!initializeReqSocket())
   {
     return false;
   }
+  ROSCPP_LOG_DEBUG("Bind succeeded to [%s] on socket [%d]", label_req.c_str(), req_sock_);
+
+  // Now connect to client's reply socket
+  if (::connect(rep_sock_, (sockaddr *)&sipc_rep, sizeof(sipc_rep)))
+  {
+    ROSCPP_LOG_DEBUG("Connect to xenoros host [%s] failed with error [%s]", label_rep.c_str(),  last_socket_error_string());
+    close();
+
+    return false;
+  }
+  if (!initializeRepSocket())
+  {
+    return false;
+  }
+  ROSCPP_LOG_DEBUG("Connect succeeded to [%s] on socket [%d]", label_rep.c_str(), rep_sock_);
 
   enableRead();
 
   return true;
 }
 
-bool TransportXeno::initializeSocket()
+bool TransportXeno::initializeReqSocket()
 {
-  ROS_ASSERT(sock_ != ROS_INVALID_SOCKET);
+  ROS_ASSERT(req_sock_ != ROS_INVALID_SOCKET);
 
   if (!(flags_ & SYNCHRONOUS))
   {
-	  int result = set_non_blocking(sock_);
-	  if ( result != 0 ) {
-	      ROS_ERROR("setting socket [%d] as non_blocking failed with error [%d]", sock_, result);
+          int result = set_non_blocking(req_sock_);
+          if ( result != 0 ) {
+              ROS_ERROR("setting request socket [%d] as non_blocking failed with error [%d]", req_sock_, result);
       close();
       return false;
     }
@@ -271,7 +372,30 @@ bool TransportXeno::initializeSocket()
   ROS_ASSERT(poll_set_ || (flags_ & SYNCHRONOUS));
   if (poll_set_)
   {
-    poll_set_->addSocket(sock_, boost::bind(&TransportXeno::socketUpdate, this, _1), shared_from_this());
+    poll_set_->addSocket(req_sock_, boost::bind(&TransportXeno::reqSocketUpdate, this, _1), shared_from_this());
+  }
+
+  return true;
+}
+
+bool TransportXeno::initializeRepSocket()
+{
+  ROS_ASSERT(rep_sock_ != ROS_INVALID_SOCKET);
+
+  if (!(flags_ & SYNCHRONOUS))
+  {
+          int result = set_non_blocking(rep_sock_);
+          if ( result != 0 ) {
+              ROS_ERROR("setting reply socket [%d] as non_blocking failed with error [%d]", rep_sock_, result);
+      close();
+      return false;
+    }
+  }
+
+  ROS_ASSERT(poll_set_ || (flags_ & SYNCHRONOUS));
+  if (poll_set_)
+  {
+    poll_set_->addSocket(rep_sock_, boost::bind(&TransportXeno::repSocketUpdate, this, _1), shared_from_this());
   }
 
   return true;
@@ -281,30 +405,30 @@ void TransportXeno::close()
 {
   Callback disconnect_cb;
 
-  if (!closed_)
+  if (!req_closed_)
   {
     {
-      boost::mutex::scoped_lock lock(close_mutex_);
+      boost::mutex::scoped_lock lock(req_close_mutex_);
 
-      if (!closed_)
+      if (!req_closed_)
       {
-        closed_ = true;
+        req_closed_ = true;
 
-        ROSCPP_LOG_DEBUG("Xeno socket [%d] closed", sock_);
+        ROSCPP_LOG_DEBUG("Xeno socket [%d] closed", req_sock_);
 
-        ROS_ASSERT(sock_ != ROS_INVALID_SOCKET);
+        ROS_ASSERT(req_sock_ != ROS_INVALID_SOCKET);
 
         if (poll_set_)
         {
-          poll_set_->delSocket(sock_);
+          poll_set_->delSocket(req_sock_);
         }
 
-        if ( close_socket(sock_) != 0 )
+        if ( close_socket(req_sock_) != 0 )
         {
-          ROS_ERROR("Error closing socket [%d]: [%s]", sock_, last_socket_error_string());
+          ROS_ERROR("Error closing socket [%d]: [%s]", req_sock_, last_socket_error_string());
         }
 
-        sock_ = ROS_INVALID_SOCKET;
+        req_sock_ = ROS_INVALID_SOCKET;
 
         disconnect_cb = disconnect_cb_;
 
@@ -324,10 +448,10 @@ void TransportXeno::close()
 int32_t TransportXeno::read(uint8_t* buffer, uint32_t size)
 {
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
-    if (closed_)
+    boost::mutex::scoped_lock lock(req_close_mutex_);
+    if (req_closed_)
     {
-      ROSCPP_LOG_DEBUG("Tried to read on a closed socket [%d]", sock_);
+      ROSCPP_LOG_DEBUG("Tried to read on a closed socket [%d]", req_sock_);
       return -1;
     }
   }
@@ -362,22 +486,6 @@ int32_t TransportXeno::read(uint8_t* buffer, uint32_t size)
     {
       if (data_filled_ == 0)
       {
-#if defined(WIN32)
-    	SSIZE_T num_bytes = 0;
-        DWORD received_bytes = 0;
-        DWORD flags = 0;
-        WSABUF iov[2];
-        iov[0].buf = reinterpret_cast<char*>(&header);
-        iov[0].len = sizeof(header);
-        iov[1].buf = reinterpret_cast<char*>(data_buffer_);
-        iov[1].len = max_datagram_size_ - sizeof(header);
-		int rc  = WSARecv(sock_, iov, 2, &received_bytes, &flags, NULL, NULL);
-		if ( rc == SOCKET_ERROR) {
-		  num_bytes = -1;
-		} else {
-			num_bytes = received_bytes;
-		}
-#else
         ssize_t num_bytes;
         struct iovec iov[2];
         iov[0].iov_base = &header;
@@ -385,8 +493,8 @@ int32_t TransportXeno::read(uint8_t* buffer, uint32_t size)
         iov[1].iov_base = data_buffer_;
         iov[1].iov_len = max_datagram_size_ - sizeof(header);
         // Read a datagram with header
-        num_bytes = readv(sock_, iov, 2);
-#endif
+        num_bytes = readv(req_sock_, iov, 2);
+
         if (num_bytes < 0)
         {
           if ( last_socket_error_is_would_block() )
@@ -403,13 +511,13 @@ int32_t TransportXeno::read(uint8_t* buffer, uint32_t size)
         }
         else if (num_bytes == 0)
         {
-          ROSCPP_LOG_DEBUG("Socket [%d] received 0/%d bytes, closing", sock_, size);
+          ROSCPP_LOG_DEBUG("Socket [%d] received 0/%d bytes, closing", req_sock_, size);
           close();
           return -1;
         }
         else if (num_bytes < (unsigned) sizeof(header))
         {
-          ROS_ERROR("Socket [%d] received short header (%d bytes): %s", sock_, int(num_bytes),  last_socket_error_string());
+          ROS_ERROR("Socket [%d] received short header (%d bytes): %s", req_sock_, int(num_bytes),  last_socket_error_string());
           close();
           return -1;
         }
@@ -503,11 +611,11 @@ int32_t TransportXeno::read(uint8_t* buffer, uint32_t size)
 int32_t TransportXeno::write(uint8_t* buffer, uint32_t size)
 {
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
+    boost::mutex::scoped_lock lock(req_close_mutex_);
 
-    if (closed_)
+    if (req_closed_)
     {
-      ROSCPP_LOG_DEBUG("Tried to write on a closed socket [%d]", sock_);
+      ROSCPP_LOG_DEBUG("Tried to write on a closed socket [%d]", req_sock_);
       return -1;
     }
   }
@@ -536,29 +644,14 @@ int32_t TransportXeno::write(uint8_t* buffer, uint32_t size)
       header.block_ = this_block;
     }
     ++this_block;
-#if defined(WIN32)
-    WSABUF iov[2];
-	DWORD sent_bytes;
-	SSIZE_T num_bytes = 0;
-	DWORD flags = 0;
-	int rc;
-	iov[0].buf = reinterpret_cast<char*>(&header);
-	iov[0].len = sizeof(header);
-	iov[1].buf = reinterpret_cast<char*>(buffer + bytes_sent);
-	iov[1].len = std::min(max_payload_size, size - bytes_sent);
-	rc = WSASend(sock_, iov, 2, &sent_bytes, flags, NULL, NULL);
-	num_bytes = sent_bytes;
-	if (rc == SOCKET_ERROR) {
-	    num_bytes = -1;
-	}
-#else
+
     struct iovec iov[2];
     iov[0].iov_base = &header;
     iov[0].iov_len = sizeof(header);
     iov[1].iov_base = buffer + bytes_sent;
     iov[1].iov_len = std::min(max_payload_size, size - bytes_sent);
-    ssize_t num_bytes = writev(sock_, iov, 2);
-#endif
+    ssize_t num_bytes = writev(req_sock_, iov, 2);
+
     //usleep(100);
     if (num_bytes < 0)
     {
@@ -575,7 +668,7 @@ int32_t TransportXeno::write(uint8_t* buffer, uint32_t size)
     }
     else if (num_bytes < (unsigned) sizeof(header))
     {
-      ROSCPP_LOG_DEBUG("Socket [%d] short write (%d bytes), closing", sock_, int(num_bytes));
+      ROSCPP_LOG_DEBUG("Socket [%d] short write (%d bytes), closing", req_sock_, int(num_bytes));
       close();
       break;
     }
@@ -591,19 +684,37 @@ int32_t TransportXeno::write(uint8_t* buffer, uint32_t size)
 
 void TransportXeno::enableRead()
 {
+  if(is_server_)
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
-  
-    if (closed_)
     {
-      return;
+      boost::mutex::scoped_lock lock(req_close_mutex_);
+
+      if (req_closed_)
+      {
+        return;
+      }
+    }
+    if (!expecting_read_)
+    {
+      poll_set_->addEvents(req_sock_, POLLIN);
+      expecting_read_ = true;
     }
   }
-
-  if (!expecting_read_)
+  else
   {
-    poll_set_->addEvents(sock_, POLLIN);
-    expecting_read_ = true;
+    {
+      boost::mutex::scoped_lock lock(rep_close_mutex_);
+
+      if (rep_closed_)
+      {
+        return;
+      }
+    }
+    if (!expecting_read_)
+    {
+      poll_set_->addEvents(rep_sock_, POLLIN);
+      expecting_read_ = true;
+    }
   }
 }
 
@@ -611,64 +722,118 @@ void TransportXeno::disableRead()
 {
   ROS_ASSERT(!(flags_ & SYNCHRONOUS));
 
+  if(is_server_)
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
-
-    if (closed_)
     {
-      return;
+      boost::mutex::scoped_lock lock(req_close_mutex_);
+
+      if (req_closed_)
+      {
+        return;
+      }
+    }
+    if (expecting_read_)
+    {
+      poll_set_->delEvents(req_sock_, POLLIN);
+      expecting_read_ = false;
     }
   }
-
-  if (expecting_read_)
+  else
   {
-    poll_set_->delEvents(sock_, POLLIN);
-    expecting_read_ = false;
+    {
+      boost::mutex::scoped_lock lock(rep_close_mutex_);
+
+      if (rep_closed_)
+      {
+        return;
+      }
+    }
+    if (expecting_read_)
+    {
+      poll_set_->delEvents(rep_sock_, POLLIN);
+      expecting_read_ = false;
+    }
   }
 }
 
 void TransportXeno::enableWrite()
 {
+  if(is_server_)
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
-
-    if (closed_)
     {
-      return;
+      boost::mutex::scoped_lock lock(req_close_mutex_);
+
+      if (req_closed_)
+      {
+        return;
+      }
+    }
+    if (!expecting_read_)
+    {
+      poll_set_->addEvents(req_sock_, POLLOUT);
+      expecting_read_ = true;
     }
   }
-
-  if (!expecting_write_)
+  else
   {
-    poll_set_->addEvents(sock_, POLLOUT);
-    expecting_write_ = true;
+    {
+      boost::mutex::scoped_lock lock(rep_close_mutex_);
+
+      if (rep_closed_)
+      {
+        return;
+      }
+    }
+    if (!expecting_read_)
+    {
+      poll_set_->addEvents(rep_sock_, POLLOUT);
+      expecting_read_ = true;
+    }
   }
 }
 
 void TransportXeno::disableWrite()
 {
+  if(is_server_)
   {
-    boost::mutex::scoped_lock lock(close_mutex_);
-
-    if (closed_)
     {
-      return;
+      boost::mutex::scoped_lock lock(req_close_mutex_);
+
+      if (req_closed_)
+      {
+        return;
+      }
+    }
+    if (expecting_read_)
+    {
+      poll_set_->delEvents(req_sock_, POLLOUT);
+      expecting_read_ = false;
     }
   }
-
-  if (expecting_write_)
+  else
   {
-    poll_set_->delEvents(sock_, POLLOUT);
-    expecting_write_ = false;
+    {
+      boost::mutex::scoped_lock lock(rep_close_mutex_);
+
+      if (rep_closed_)
+      {
+        return;
+      }
+    }
+    if (expecting_read_)
+    {
+      poll_set_->delEvents(rep_sock_, POLLOUT);
+      expecting_read_ = false;
+    }
   }
 }
 
-TransportXenoPtr TransportXeno::createOutgoing(std::string host, int port, int connection_id, int max_datagram_size)
+TransportXenoPtr TransportXeno::createOutgoing(const std::string& label, int connection_id, int max_datagram_size)
 {
   ROS_ASSERT(is_server_);
   
   TransportXenoPtr transport(new TransportXeno(poll_set_, flags_, max_datagram_size));
-  if (!transport->connect(host, port, connection_id))
+  if (!transport->connect(label, connection_id))
   {
     ROS_ERROR("Failed to create outgoing connection");
     return TransportXenoPtr();

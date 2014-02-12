@@ -63,9 +63,11 @@ public:
 
   uint32_t getTCPPort();
   uint32_t getUDPPort();
+  uint32_t getXenoPort();
 
   const TransportTCPPtr& getTCPServerTransport() { return tcpserver_transport_; }
   const TransportUDPPtr& getUDPServerTransport() { return udpserver_transport_; }
+  const TransportXenoPtr& getXenoServerTransport() { return xenoserver_transport_; }
 
   void udprosIncomingConnection(const TransportUDPPtr& transport, Header& header);
 
@@ -98,6 +100,7 @@ private:
 
   TransportTCPPtr tcpserver_transport_;
   TransportUDPPtr udpserver_transport_;
+  TransportXenoPtr xenoserver_transport_;
 
   const static int MAX_TCPROS_CONN_QUEUE = 100; // magic
 };
