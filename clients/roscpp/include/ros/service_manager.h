@@ -83,7 +83,8 @@ public:
   ServiceServerLinkPtr createServiceServerLink(const std::string& service,
                                                 bool persistent,
                                                 const std::string& request_md5sum, const std::string& response_md5sum,
-                                                const M_string& header_values);
+                                                const M_string& header_values,
+                                                const TransportHints& transport_hints);
 
   /** @brief Remove the specified service client from our list
    *

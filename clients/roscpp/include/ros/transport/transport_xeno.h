@@ -95,15 +95,15 @@ public:
    * \brief Start a server socket and listen on a port
    * \param port The port to listen on
    */
-  bool createIncoming(const std::string& label, bool is_server);
+  bool createIncoming(int port, bool is_server);
   /**
    * \brief Create a connection to a server socket.
    */
-  TransportXenoPtr createOutgoing(const std::string& label, int conn_id, int max_datagram_size);
+  TransportXenoPtr createOutgoing(int port, int conn_id, int max_datagram_size);
   /**
    * \brief Returns the port this transport is listening on
    */
-  std::string getServerLabel() const {return server_label_;}
+  int getServerPort() const {return server_port_;}
 
   // overrides from Transport
   virtual int32_t read(uint8_t* buffer, uint32_t size);
@@ -120,7 +120,7 @@ public:
 
   virtual bool requiresHeader() {return false;}
 
-  virtual const char* getType() {return "XENOROS";}
+  virtual const char* getType() {return "XenoROS";}
 
   int getMaxDatagramSize() const {return max_datagram_size_;}
 
@@ -166,7 +166,7 @@ private:
   rtipc_port_label plabel_req_;
   rtipc_port_label plabel_rep_;
   sockaddr_ipc server_address_;
-  std::string server_label_;
+  int server_port_;
 
   std::string cached_remote_host_;
 

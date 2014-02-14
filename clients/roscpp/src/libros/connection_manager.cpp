@@ -90,6 +90,14 @@ void ConnectionManager::start()
     ROS_FATAL("Listen failed");
     ROS_BREAK();
   }
+
+  // Bring up the Xenomai listener socket
+  xenoserver_transport_ = TransportXenoPtr(new TransportXeno(&poll_manager_->getPollSet()));
+  if (!xenoserver_transport_->createIncoming("xenoros-req", true))
+  {
+    ROS_FATAL("Listen failed");
+    ROS_BREAK();
+  }
 }
 
 void ConnectionManager::shutdown()

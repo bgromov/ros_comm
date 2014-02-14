@@ -58,7 +58,7 @@ TransportXeno::TransportXeno(PollSet* poll_set, int flags, int max_datagram_size
 , expecting_read_(false)
 , expecting_write_(false)
 , is_server_(false)
-, server_label_(-1)
+, server_port_(-1)
 , poll_set_(poll_set)
 , flags_(flags)
 , connection_id_(0)
@@ -185,7 +185,7 @@ std::string TransportXeno::getTransportInfo()
   return "XENOROS connection to [" + cached_remote_host_ + "]";
 }
 
-bool TransportXeno::connect(const std::string& label, int connection_id)
+bool TransportXeno::connect(int port, int connection_id)
 {
   std::string label_req = label + "-req";
   std::string label_rep = label + "-rep";
@@ -268,7 +268,7 @@ bool TransportXeno::connect(const std::string& label, int connection_id)
   return true;
 }
 
-bool TransportXeno::createIncoming(const std::string& label, bool is_server)
+bool TransportXeno::createIncoming(int port, bool is_server)
 {
   is_server_ = is_server;
 

@@ -247,7 +247,8 @@ ServicePublicationPtr ServiceManager::lookupServicePublication(const std::string
 
 ServiceServerLinkPtr ServiceManager::createServiceServerLink(const std::string& service, bool persistent,
                                              const std::string& request_md5sum, const std::string& response_md5sum,
-                                             const M_string& header_values)
+                                             const M_string& header_values,
+                                             const TransportHints& transport_hints)
 {
 
   boost::recursive_mutex::scoped_lock shutdown_lock(shutting_down_mutex_);
@@ -263,8 +264,51 @@ ServiceServerLinkPtr ServiceManager::createServiceServerLink(const std::string& 
     return ServiceServerLinkPtr();
   }
 
-  TransportTCPPtr transport(new TransportTCP(&poll_manager_->getPollSet()));
-  if (transport->connect(serv_host, serv_port))
+  bool res = false;
+  TransportXenoPtr xeno_transport;
+  TransportTCPPtr tcp_transport;
+  TransportPtr transport;
+  TransportHints hints = transport_hints;
+
+  V_string transports = hints.getTransports();
+  if (transports.empty())
+  {
+    hints.reliable();
+    transports = hints.getTransports();
+  }
+  for (V_string::const_iterator it = transports.begin();
+       it != transports.end();
+       ++it)
+  {
+    if (*it == "Xeno")
+    {
+      if(network::getHost() != serv_host)
+      {
+        ROS_WARN_STREAM("XenoROS requires server and client to be on the same host, "
+                          "but client is at \"" << network::getHost()
+                          << "\" and server is at \"" << serv_host << "\""
+                       );
+        continue;
+      }
+      int conn_id = connection_manager_->getNewConnectionID();
+      res = xeno_transport->connect(service, conn_id);
+      transport = xeno_transport;
+      break;
+    }
+    else if (*it == "TCP")
+    {
+      tcp_transport = TransportTCPPtr(new TransportTCP(&poll_manager_->getPollSet()));
+      res = tcp_transport->connect(serv_host, serv_port);
+      transport = tcp_transport;
+      break;
+    }
+    else
+    {
+      ROS_WARN("Unsupported transport type hinted: %s, skipping", it->c_str());
+    }
+  }
+
+  if(res)
   {
     ConnectionPtr connection(new Connection());
     connection_manager_->addConnection(connection);
@@ -282,7 +326,7 @@ ServiceServerLinkPtr ServiceManager::createServiceServerLink(const std::string& 
     return client;
   }
 
-  ROSCPP_LOG_DEBUG("Failed to connect to service [%s] (mapped=[%s]) at [%s:%d]", service.c_str(), service.c_str(), serv_host.c_str(), serv_port);
+  ROSCPP_LOG_DEBUG("Failed to connect to service [%s] (mapped=[%s]) at [%s:%d] via %s transport", service.c_str(), service.c_str(), serv_host.c_str(), serv_port, transport_hints[0]);
 
   return ServiceServerLinkPtr();
 }

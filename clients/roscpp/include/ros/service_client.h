@@ -43,7 +43,7 @@ class ROSCPP_DECL ServiceClient
 {
 public:
   ServiceClient() {}
-  ServiceClient(const std::string& service_name, bool persistent, const M_string& header_values, const std::string& service_md5sum);
+  ServiceClient(const std::string& service_name, bool persistent, const M_string& header_values, const std::string& service_md5sum, const TransportHints& transport_hints);
   ServiceClient(const ServiceClient& rhs);
   ~ServiceClient();
 
@@ -194,6 +194,7 @@ private:
     M_string header_values_;
     std::string service_md5sum_;
     bool is_shutdown_;
+    TransportHints transport_hints_;
   };
   typedef boost::shared_ptr<Impl> ImplPtr;
   typedef boost::weak_ptr<Impl> ImplWPtr;
